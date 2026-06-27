@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { runResumeReviewManagedAgent } from './lib/agents/resumeReviewAgent';
 import type {
   ResumeReviewAgentInput,
@@ -7,8 +7,7 @@ import type {
   ResumeReviewTone,
 } from './lib/agents/types';
 
-type View = 'home' | 'review' | 'history';
-type ReviewStep = 0 | 1 | 2 | 3;
+type View = 'home' | 'workspace' | 'history';
 
 interface ReviewForm {
   currentRole: string;
@@ -39,29 +38,6 @@ interface ReviewHistoryItem {
 
 const HISTORY_KEY = 'shukatsu_review_history_v1';
 
-const documentLabels: Record<ResumeReviewDocumentType, string> = {
-  career_summary: '職務要約',
-  self_pr: '自己PR',
-  motivation: '志望動機',
-  work_experience: '職務経歴',
-  gakuchika: 'ガクチカ',
-  interview_intro: '面接用自己紹介',
-};
-
-const toneLabels: Record<ResumeReviewTone, string> = {
-  natural: '自然',
-  business: 'ビジネス',
-  interview: '面接で話しやすい',
-  n2: 'N2向け',
-};
-
-const steps = [
-  { label: 'あなたの経験', short: '経験' },
-  { label: '応募したい求人', short: '求人' },
-  { label: '添削したい内容', short: '書類' },
-  { label: '添削結果', short: '結果' },
-] as const;
-
 const initialForm: ReviewForm = {
   currentRole: '',
   currentIndustry: '',
@@ -79,7 +55,41 @@ const initialForm: ReviewForm = {
   tone: 'business',
 };
 
-function toAgentInput(form: ReviewForm): ResumeReviewAgentInput {
+const documentLabels: Record<ResumeReviewDocumentType, string> = {
+  career_summary: '履歴書',
+  self_pr: '自己PR',
+  motivation: 'ES / 志望動機',
+  work_experience: '職務経歴書',
+  gakuchika: 'ガクチカ',
+  interview_intro: '面接練習',
+};
+
+const documentDescriptions: Record<ResumeReviewDocumentType, string> = {
+  career_summary: '基本情報と経歴を整理',
+  self_pr: '強みが伝わる自己PR',
+  motivation: '求人に合わせた志望動機',
+  work_experience: '職務経歴を日本語で整理',
+  gakuchika: '学生時代の経験を構造化',
+  interview_intro: '面接で話しやすい内容',
+};
+
+const workflowSteps = [
+  { title: 'Upload', text: 'Resume / JD / screenshot' },
+  { title: 'AI Agent Analysis', text: '経験と求人内容を理解' },
+  { title: 'Generate Documents', text: '日本語の応募書類を作成' },
+  { title: 'Review / Export', text: '編集・コピー・保存' },
+];
+
+const agentSteps = [
+  'Reading uploaded resume',
+  'Extracting career information',
+  'Matching JD requirements',
+  'Generating Japanese business wording',
+  'Improving keigo and natural Japanese',
+  'Preparing exportable document',
+];
+
+function toAgentInput(form: ReviewForm, uploadedFileNames: string[]): ResumeReviewAgentInput {
   return {
     candidate: {
       currentRole: form.currentRole,
@@ -87,7 +97,9 @@ function toAgentInput(form: ReviewForm): ResumeReviewAgentInput {
       yearsOfExperience: form.yearsOfExperience,
       mainTasks: form.keyTasks,
       strengths: form.emphasizedSkills,
-      additionalInfo: form.notes,
+      additionalInfo: [form.notes, uploadedFileNames.length ? `Uploaded files: ${uploadedFileNames.join(', ')}` : '']
+        .filter(Boolean)
+        .join('\n'),
     },
     targetJob: {
       role: form.targetRole,
@@ -112,10 +124,7 @@ async function requestResumeReview(input: ResumeReviewAgentInput): Promise<Resum
       body: JSON.stringify(input),
     });
 
-    if (!response.ok) {
-      throw new Error('API route unavailable');
-    }
-
+    if (!response.ok) throw new Error('API route unavailable');
     return (await response.json()) as ResumeReviewAgentOutput;
   } catch {
     return runResumeReviewManagedAgent(input, { allowMockFallback: true });
@@ -124,9 +133,10 @@ async function requestResumeReview(input: ResumeReviewAgentInput): Promise<Resum
 
 export default function App() {
   const [view, setView] = useState<View>('home');
-  const [step, setStep] = useState<ReviewStep>(0);
   const [form, setForm] = useState<ReviewForm>(initialForm);
+  const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([]);
   const [agentOutput, setAgentOutput] = useState<ResumeReviewAgentOutput | null>(null);
+  const [editedText, setEditedText] = useState('');
   const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -143,46 +153,35 @@ export default function App() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [view, step]);
+  }, [view]);
 
-  const canGoNext = useMemo(() => {
-    if (step === 0) return Boolean(form.currentRole.trim() && form.keyTasks.trim());
-    if (step === 1) return Boolean(form.targetRole.trim() && form.jobText.trim());
-    if (step === 2) return Boolean(form.originalText.trim());
-    return true;
-  }, [form, step]);
+  const readiness = useMemo(() => {
+    const required = [form.currentRole, form.keyTasks, form.targetRole, form.jobText, form.originalText];
+    return Math.round((required.filter((item) => item.trim()).length / required.length) * 100);
+  }, [form]);
 
   const updateForm = (patch: Partial<ReviewForm>) => {
     setForm((prev) => ({ ...prev, ...patch }));
     setError('');
   };
 
-  const startReview = () => {
-    setView('review');
-    setStep(0);
+  const startWorkspace = () => {
+    setView('workspace');
     setError('');
   };
 
-  const goNext = () => {
-    if (!canGoNext) {
-      setError(getValidationMessage(step));
-      return;
-    }
-    setStep((prev) => Math.min(prev + 1, 3) as ReviewStep);
-  };
-
   const runReview = async () => {
-    if (!form.jobText.trim() || !form.originalText.trim()) {
-      setError('求人内容または添削したい文章を入力してください。');
+    if (!form.jobText.trim() || !form.originalText.trim() || !form.currentRole.trim() || !form.keyTasks.trim() || !form.targetRole.trim()) {
+      setError('現在の経験、求人内容、添削したい文章を入力してください。');
       return;
     }
 
     setLoading(true);
     setError('');
     try {
-      const nextOutput = await requestResumeReview(toAgentInput(form));
+      const nextOutput = await requestResumeReview(toAgentInput(form, uploadedFileNames));
       setAgentOutput(nextOutput);
-      setStep(3);
+      setEditedText(nextOutput.improvedText);
     } catch {
       setError('AI添削中にエラーが発生しました。少し時間をおいて再度お試しください。');
     } finally {
@@ -192,8 +191,8 @@ export default function App() {
 
   const copyResult = async () => {
     if (!agentOutput) return;
-    await navigator.clipboard.writeText(agentOutput.improvedText);
-    showToast('修正後の文章をコピーしました。');
+    await navigator.clipboard.writeText(editedText || agentOutput.improvedText);
+    showToast('生成文をコピーしました。');
   };
 
   const saveResult = () => {
@@ -205,15 +204,10 @@ export default function App() {
       targetRole: form.targetRole || '応募職種未入力',
       documentType: form.documentType,
       matchScore: agentOutput.score,
-      improvedText: agentOutput.improvedText,
+      improvedText: editedText || agentOutput.improvedText,
     };
-    setHistory((prev) => [item, ...prev.filter((entry) => entry.id !== item.id)]);
+    setHistory((prev) => [item, ...prev]);
     showToast('履歴に保存しました。');
-  };
-
-  const resetReview = () => {
-    setAgentOutput(null);
-    setStep(2);
   };
 
   const showToast = (message: string) => {
@@ -223,321 +217,389 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Header view={view} setView={setView} startReview={startReview} />
+      <Header view={view} setView={setView} startWorkspace={startWorkspace} />
       {toast && <div className="toast">{toast}</div>}
 
-      {view === 'home' && <HomePage startReview={startReview} />}
-      {view === 'review' && (
-        <main className="page-shell">
-          <Stepper step={step} />
-          {error && <div className="form-error">{error}</div>}
-          {step === 0 && <CandidateBackgroundStep form={form} updateForm={updateForm} onNext={goNext} />}
-          {step === 1 && <TargetJobStep form={form} updateForm={updateForm} onPrev={() => setStep(0)} onNext={goNext} />}
-          {step === 2 && (
-            <DocumentInputStep
-              form={form}
-              updateForm={updateForm}
-              onPrev={() => setStep(1)}
-              onSubmit={runReview}
-              loading={loading}
-            />
-          )}
-          {step === 3 && agentOutput && (
-            <ReviewResult
-              form={form}
-              agentOutput={agentOutput}
-              onCopy={copyResult}
-              onSave={saveResult}
-              onEditAgain={resetReview}
-              onNewDocument={() => setStep(2)}
-              onInterview={() => showToast('面接練習は次のアップデートでこの内容から開始できます。')}
-              onSaveJob={saveResult}
-            />
-          )}
-        </main>
+      {view === 'home' && <HomePage startWorkspace={startWorkspace} />}
+      {view === 'workspace' && (
+        <WorkspacePage
+          form={form}
+          updateForm={updateForm}
+          uploadedFileNames={uploadedFileNames}
+          setUploadedFileNames={setUploadedFileNames}
+          agentOutput={agentOutput}
+          editedText={editedText}
+          setEditedText={setEditedText}
+          loading={loading}
+          error={error}
+          readiness={readiness}
+          runReview={runReview}
+          copyResult={copyResult}
+          saveResult={saveResult}
+          showToast={showToast}
+        />
       )}
-      {view === 'history' && <HistoryPage history={history} setHistory={setHistory} copyText={showToast} />}
+      {view === 'history' && <HistoryPage history={history} setHistory={setHistory} showToast={showToast} />}
     </div>
   );
 }
 
-function Header({ view, setView, startReview }: { view: View; setView: (view: View) => void; startReview: () => void }) {
+function Header({ view, setView, startWorkspace }: { view: View; setView: (view: View) => void; startWorkspace: () => void }) {
   return (
     <header className="site-header">
       <button className="brand" onClick={() => setView('home')} aria-label="Home">
-        <span className="brand-mark">書</span>
+        <span className="brand-mark">S</span>
         <span>
           <strong>Shukatsu Copilot</strong>
-          <small>日本就職向け応募書類添削</small>
+          <small>Gemini managed agent for Japan job documents</small>
         </span>
       </button>
-      <nav className="main-nav" aria-label="Primary">
-        <button className={view === 'review' ? 'active' : ''} onClick={startReview}>添削する</button>
-        <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>履歴</button>
+      <nav className="main-nav" aria-label="Primary navigation">
+        <button className={view === 'workspace' ? 'active' : ''} onClick={startWorkspace}>Workspace</button>
+        <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>History</button>
       </nav>
     </header>
   );
 }
 
-function HomePage({ startReview }: { startReview: () => void }) {
+function HomePage({ startWorkspace }: { startWorkspace: () => void }) {
   return (
     <main className="home-shell">
-      <section className="hero">
-        <div>
-          <p className="eyebrow">日本就職の応募書類を、順番に整える</p>
-          <h1>AIで日本就職向けの応募書類をわかりやすく改善</h1>
-          <p className="hero-copy">
-            Gemini Managed Agent が、あなたの経験と求人内容をもとに、履歴書・職務経歴書・自己PR・志望動機を自然な日本語に整えます。
+      <section className="hero-shell">
+        <div className="hero-copy-block">
+          <div className="product-pill">Powered by Gemini Managed Agent</div>
+          <h1>外国人求職者のための日本就職書類作成エージェント</h1>
+          <p>
+            履歴書、職務経歴書、ES、志望動機、自己PR、面接練習の内容を、求人票に合わせて自然な日本語へ整えます。
           </p>
           <div className="hero-actions">
-            <button className="btn btn-primary" onClick={startReview}>書類を添削する</button>
-            <a className="btn btn-secondary" href="#how-it-works">使い方を見る</a>
+            <button className="btn btn-primary" onClick={startWorkspace}>Start with your resume</button>
+            <a className="btn btn-secondary" href="#workflow">View workflow</a>
+          </div>
+        </div>
+        <div className="hero-preview-card">
+          <div className="preview-toolbar">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div className="preview-line strong" />
+          <div className="preview-line" />
+          <div className="preview-line short" />
+          <div className="preview-score">
+            <strong>82</strong>
+            <span>Japan-fit score</span>
           </div>
         </div>
       </section>
 
-      <section id="how-it-works" className="simple-section">
-        <div className="section-heading">
-          <span>3 steps</span>
-          <h2>入力する順番はシンプルです</h2>
-        </div>
-        <div className="three-grid">
-          <StepCard number="1" title="現在の経験を入力" />
-          <StepCard number="2" title="求人内容を入力" />
-          <StepCard number="3" title="Gemini Agent が改善案を提案" />
+      <section id="workflow" className="section-block">
+        <SectionTitle eyebrow="Workflow" title="Upload → AI Agent Analysis → Generate Documents → Review / Export" />
+        <div className="workflow-grid">
+          {workflowSteps.map((step, index) => (
+            <article className="workflow-card" key={step.title}>
+              <span>{index + 1}</span>
+              <h3>{step.title}</h3>
+              <p>{step.text}</p>
+            </article>
+          ))}
         </div>
       </section>
 
-      <section className="simple-section">
-        <div className="section-heading">
-          <span>Features</span>
-          <h2>応募先に合わせて、伝わる表現へ</h2>
-        </div>
-        <div className="three-grid">
-          <FeatureCard title="求人に合わせて改善" text="応募先が求める経験やスキルに合わせて、伝える順番を整理します。" />
-          <FeatureCard title="自然なビジネス日本語に修正" text="直訳っぽい表現を、応募書類として読みやすい日本語に整えます。" />
-          <FeatureCard title="修正理由までわかる" text="どこをなぜ変えたのかを確認できるので、面接準備にも使えます。" />
-        </div>
+      <section className="section-block">
+        <SectionTitle eyebrow="Outputs" title="日本就職に必要な書類をまとめてサポート" />
+        <DocumentTypeCards selected="motivation" onSelect={() => startWorkspace()} />
       </section>
     </main>
   );
 }
 
-function Stepper({ step }: { step: ReviewStep }) {
+function WorkspacePage(props: {
+  form: ReviewForm;
+  updateForm: (patch: Partial<ReviewForm>) => void;
+  uploadedFileNames: string[];
+  setUploadedFileNames: (names: string[]) => void;
+  agentOutput: ResumeReviewAgentOutput | null;
+  editedText: string;
+  setEditedText: (text: string) => void;
+  loading: boolean;
+  error: string;
+  readiness: number;
+  runReview: () => void;
+  copyResult: () => void;
+  saveResult: () => void;
+  showToast: (message: string) => void;
+}) {
   return (
-    <div className="stepper" aria-label="Review steps">
-      {steps.map((item, index) => (
-        <div key={item.label} className={`stepper-item ${index === step ? 'current' : ''} ${index < step ? 'done' : ''}`}>
-          <span>{index + 1}</span>
-          <strong>{item.label}</strong>
-          <small>{item.short}</small>
+    <main className="workspace-shell">
+      <div className="workspace-heading">
+        <div>
+          <p className="eyebrow">App workspace</p>
+          <h1>Japan job application workspace</h1>
+          <p>Upload materials, guide the Gemini agent, and review generated Japanese documents in one focused screen.</p>
         </div>
+        <div className="readiness-chip">{props.readiness}% ready</div>
+      </div>
+
+      {props.error && <div className="form-error">{props.error}</div>}
+
+      <section className="workspace-grid">
+        <InputPanel {...props} />
+        <AgentStatusPanel loading={props.loading} agentOutput={props.agentOutput} readiness={props.readiness} runReview={props.runReview} />
+        <OutputPanel
+          form={props.form}
+          agentOutput={props.agentOutput}
+          editedText={props.editedText}
+          setEditedText={props.setEditedText}
+          copyResult={props.copyResult}
+          saveResult={props.saveResult}
+          showToast={props.showToast}
+        />
+      </section>
+    </main>
+  );
+}
+
+function InputPanel({
+  form,
+  updateForm,
+  uploadedFileNames,
+  setUploadedFileNames,
+}: {
+  form: ReviewForm;
+  updateForm: (patch: Partial<ReviewForm>) => void;
+  uploadedFileNames: string[];
+  setUploadedFileNames: (names: string[]) => void;
+}) {
+  return (
+    <aside className="workspace-panel input-panel">
+      <PanelHeader title="1. Upload & inputs" text="Resume, JD, and document draft" />
+      <label className="upload-box">
+        <input
+          type="file"
+          multiple
+          accept="image/*,.pdf,.txt,.doc,.docx"
+          onChange={(event) => setUploadedFileNames(Array.from(event.target.files || []).map((file) => file.name))}
+        />
+        <strong>Upload resume / JD screenshot</strong>
+        <span>PDF, image, or text file. In this demo, filenames are passed to the agent context.</span>
+      </label>
+      <div className="file-list">
+        {uploadedFileNames.length ? uploadedFileNames.map((name) => <span key={name}>{name}</span>) : <span>No file selected</span>}
+      </div>
+
+      <div className="field-grid">
+        <Field label="Current role" required>
+          <input value={form.currentRole} onChange={(e) => updateForm({ currentRole: e.target.value })} placeholder="例：営業事務" />
+        </Field>
+        <Field label="Target role" required>
+          <input value={form.targetRole} onChange={(e) => updateForm({ targetRole: e.target.value })} placeholder="例：カスタマーサクセス" />
+        </Field>
+      </div>
+      <div className="field-grid">
+        <Field label="Current industry">
+          <input value={form.currentIndustry} onChange={(e) => updateForm({ currentIndustry: e.target.value })} placeholder="例：教育 / SaaS" />
+        </Field>
+        <Field label="Experience">
+          <input value={form.yearsOfExperience} onChange={(e) => updateForm({ yearsOfExperience: e.target.value })} placeholder="例：2年" />
+        </Field>
+      </div>
+      <Field label="Career information" required>
+        <textarea value={form.keyTasks} onChange={(e) => updateForm({ keyTasks: e.target.value })} placeholder="主な仕事内容、成果、強みを書いてください。" />
+      </Field>
+      <Field label="Job description / JD" required>
+        <textarea value={form.jobText} onChange={(e) => updateForm({ jobText: e.target.value })} placeholder="求人票、必須条件、歓迎条件を貼り付けてください。" />
+      </Field>
+      <Field label="Original document" required>
+        <textarea value={form.originalText} onChange={(e) => updateForm({ originalText: e.target.value })} placeholder="添削したい自己PR・志望動機などを貼り付けてください。" />
+      </Field>
+      <Field label="Strengths / skills">
+        <input value={form.emphasizedSkills} onChange={(e) => updateForm({ emphasizedSkills: e.target.value })} placeholder="例：顧客対応、業務改善" />
+      </Field>
+      <Field label="Company / required skills">
+        <div className="split-row">
+          <input value={form.companyName} onChange={(e) => updateForm({ companyName: e.target.value })} placeholder="会社名" />
+          <input value={form.requiredSkills} onChange={(e) => updateForm({ requiredSkills: e.target.value })} placeholder="求められるスキル" />
+        </div>
+      </Field>
+      <DocumentTypeCards selected={form.documentType} onSelect={(documentType) => updateForm({ documentType })} compact />
+      <div className="tone-row">
+        {(['natural', 'business', 'interview', 'n2'] as ResumeReviewTone[]).map((tone) => (
+          <button key={tone} className={form.tone === tone ? 'selected' : ''} onClick={() => updateForm({ tone })}>
+            {tone === 'natural' && '自然'}
+            {tone === 'business' && 'ビジネス'}
+            {tone === 'interview' && '面接向け'}
+            {tone === 'n2' && 'N2向け'}
+          </button>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function AgentStatusPanel({
+  loading,
+  agentOutput,
+  readiness,
+  runReview,
+}: {
+  loading: boolean;
+  agentOutput: ResumeReviewAgentOutput | null;
+  readiness: number;
+  runReview: () => void;
+}) {
+  return (
+    <section className="workspace-panel agent-panel">
+      <PanelHeader title="2. Gemini agent" text="Managed analysis pipeline" />
+      <div className="agent-orb">
+        <span>{loading ? 'Working' : agentOutput ? 'Done' : 'Ready'}</span>
+      </div>
+      <div className="progress-track">
+        <div style={{ width: `${agentOutput ? 100 : loading ? 68 : readiness}%` }} />
+      </div>
+      <div className="agent-step-list">
+        {agentSteps.map((step, index) => {
+          const done = agentOutput || (loading && index < 4) || (!loading && readiness > index * 16);
+          return (
+            <div className={done ? 'done' : ''} key={step}>
+              <span>{done ? '✓' : index + 1}</span>
+              <p>{step}</p>
+            </div>
+          );
+        })}
+      </div>
+      <button className="btn btn-primary run-button" onClick={runReview} disabled={loading}>
+        {loading ? 'Gemini agent is generating...' : 'Run Gemini managed agent'}
+      </button>
+      <p className="privacy-note">
+        API keys stay server-side. GitHub Pages demo uses mock fallback when the API route is unavailable.
+      </p>
+    </section>
+  );
+}
+
+function OutputPanel({
+  form,
+  agentOutput,
+  editedText,
+  setEditedText,
+  copyResult,
+  saveResult,
+  showToast,
+}: {
+  form: ReviewForm;
+  agentOutput: ResumeReviewAgentOutput | null;
+  editedText: string;
+  setEditedText: (text: string) => void;
+  copyResult: () => void;
+  saveResult: () => void;
+  showToast: (message: string) => void;
+}) {
+  return (
+    <aside className="workspace-panel output-panel">
+      <PanelHeader title="3. Generated preview" text="Review, edit, copy, or continue" />
+      {!agentOutput && (
+        <div className="empty-preview">
+          <strong>Generated Japanese document will appear here.</strong>
+          <p>Run the Gemini managed agent after entering the resume, JD, and original draft.</p>
+        </div>
+      )}
+      {agentOutput && (
+        <>
+          <div className="score-summary">
+            <strong>{agentOutput.score}</strong>
+            <span>Japan-fit score</span>
+          </div>
+          <div className="summary-strip">
+            <p>{agentOutput.agentReasoningSummary}</p>
+          </div>
+          <div className="document-preview">
+            <div className="document-preview-header">
+              <span>{documentLabels[form.documentType]}</span>
+              <button onClick={copyResult}>Copy</button>
+            </div>
+            <textarea
+              className="generated-editor"
+              value={editedText}
+              onChange={(event) => setEditedText(event.target.value)}
+              aria-label="Generated document editor"
+            />
+          </div>
+          <div className="revision-list">
+            <h3>Revision reasons</h3>
+            {agentOutput.revisionReasons.map((item) => (
+              <div key={`${item.before}-${item.after}`}>
+                <p><b>Before:</b> {item.before}</p>
+                <p><b>After:</b> {item.after}</p>
+                <span>{item.reason}</span>
+              </div>
+            ))}
+          </div>
+          <div className="next-action-grid compact-actions">
+            <button onClick={saveResult}>Save</button>
+            <button onClick={() => showToast('Interview preparation can continue from this generated content.')}>Interview prep</button>
+          </div>
+        </>
+      )}
+    </aside>
+  );
+}
+
+function DocumentTypeCards({
+  selected,
+  onSelect,
+  compact,
+}: {
+  selected: ResumeReviewDocumentType;
+  onSelect: (type: ResumeReviewDocumentType) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className={compact ? 'document-card-grid compact' : 'document-card-grid'}>
+      {(['career_summary', 'work_experience', 'motivation', 'self_pr', 'interview_intro'] as ResumeReviewDocumentType[]).map((type) => (
+        <button key={type} className={selected === type ? 'selected' : ''} onClick={() => onSelect(type)}>
+          <strong>{documentLabels[type]}</strong>
+          <span>{documentDescriptions[type]}</span>
+        </button>
       ))}
     </div>
   );
 }
 
-function CandidateBackgroundStep({ form, updateForm, onNext }: StepProps & { onNext: () => void }) {
-  return (
-    <section className="flow-card">
-      <StepHeader title="あなたの経験" description="まず、現在の仕事や経験を教えてください。" />
-      <div className="form-grid">
-        <Field label="現在の職種" required>
-          <input value={form.currentRole} onChange={(e) => updateForm({ currentRole: e.target.value })} placeholder="例：営業事務、マーケティング、ソフトウェアエンジニア" />
-        </Field>
-        <Field label="現在の業界">
-          <input value={form.currentIndustry} onChange={(e) => updateForm({ currentIndustry: e.target.value })} placeholder="例：教育、IT、小売、メーカー" />
-        </Field>
-        <Field label="経験年数">
-          <input value={form.yearsOfExperience} onChange={(e) => updateForm({ yearsOfExperience: e.target.value })} placeholder="例：2年、半年、在学中" />
-        </Field>
-        <Field label="強調したい経験・スキル">
-          <input value={form.emphasizedSkills} onChange={(e) => updateForm({ emphasizedSkills: e.target.value })} placeholder="例：顧客対応、データ分析、チーム調整" />
-        </Field>
-      </div>
-      <Field label="主な仕事内容" required>
-        <textarea value={form.keyTasks} onChange={(e) => updateForm({ keyTasks: e.target.value })} placeholder="例：顧客からの問い合わせ対応、資料作成、社内メンバーとの調整を担当しました。" />
-      </Field>
-      <Field label="補足情報" optional>
-        <textarea className="short-textarea" value={form.notes} onChange={(e) => updateForm({ notes: e.target.value })} placeholder="例：日本語はN2、英語での顧客対応経験があります。" />
-      </Field>
-      <div className="flow-actions right">
-        <button className="btn btn-primary" onClick={onNext}>次へ</button>
-      </div>
-    </section>
-  );
-}
-
-function TargetJobStep({ form, updateForm, onPrev, onNext }: StepProps & { onPrev: () => void; onNext: () => void }) {
-  return (
-    <section className="flow-card">
-      <StepHeader title="応募したい求人" description="応募先の仕事内容や求められるスキルを入力してください。" />
-      <div className="form-grid">
-        <Field label="応募職種" required>
-          <input value={form.targetRole} onChange={(e) => updateForm({ targetRole: e.target.value })} placeholder="例：カスタマーサクセス、商品企画、法人営業" />
-        </Field>
-        <Field label="応募業界">
-          <input value={form.targetIndustry} onChange={(e) => updateForm({ targetIndustry: e.target.value })} placeholder="例：SaaS、人材、メーカー、広告" />
-        </Field>
-        <Field label="会社名" optional>
-          <input value={form.companyName} onChange={(e) => updateForm({ companyName: e.target.value })} placeholder="例：株式会社〇〇" />
-        </Field>
-        <Field label="求められるスキル" optional>
-          <input value={form.requiredSkills} onChange={(e) => updateForm({ requiredSkills: e.target.value })} placeholder="例：顧客折衝、要件整理、Excel" />
-        </Field>
-      </div>
-      <Field label="求人票 / JD テキスト" required>
-        <textarea className="large-textarea" value={form.jobText} onChange={(e) => updateForm({ jobText: e.target.value })} placeholder="求人票や会社ページの仕事内容・必須条件・歓迎条件を貼り付けてください。" />
-      </Field>
-      <div className="upload-note">
-        画像・PDFアップロードは今後の拡張予定です。今は求人票の文章を貼り付けると、より正確に添削できます。
-      </div>
-      <div className="flow-actions">
-        <button className="btn btn-secondary" onClick={onPrev}>戻る</button>
-        <button className="btn btn-primary" onClick={onNext}>次へ</button>
-      </div>
-    </section>
-  );
-}
-
-function DocumentInputStep({ form, updateForm, onPrev, onSubmit, loading }: StepProps & { onPrev: () => void; onSubmit: () => void; loading: boolean }) {
-  return (
-    <section className="flow-card">
-      <StepHeader title="添削したい内容" description="直したい文章を入力し、出力のトーンを選んでください。" />
-      <div className="field-block">
-        <div className="field-label">添削したい書類タイプ</div>
-        <div className="segmented-grid">
-          {(['self_pr', 'motivation', 'career_summary', 'work_experience', 'gakuchika', 'interview_intro'] as ResumeReviewDocumentType[]).map((type) => (
-            <button key={type} className={form.documentType === type ? 'selected' : ''} onClick={() => updateForm({ documentType: type })}>
-              {documentLabels[type]}
-            </button>
-          ))}
-        </div>
-      </div>
-      <Field label="原文" required>
-        <textarea className="large-textarea focus-textarea" value={form.originalText} onChange={(e) => updateForm({ originalText: e.target.value })} placeholder="添削したい自己PR・志望動機などを貼り付けてください。短いメモでも大丈夫です。" />
-      </Field>
-      <div className="field-block">
-        <div className="field-label">出力トーン</div>
-        <div className="tone-row">
-          {(['natural', 'business', 'interview', 'n2'] as ResumeReviewTone[]).map((mode) => (
-            <button key={mode} className={form.tone === mode ? 'selected' : ''} onClick={() => updateForm({ tone: mode })}>
-              {toneLabels[mode]}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="flow-actions">
-        <button className="btn btn-secondary" onClick={onPrev}>戻る</button>
-        <button className="btn btn-primary" onClick={onSubmit} disabled={loading}>{loading ? 'Gemini Agent が応募書類を分析しています...' : 'Gemini Agent で添削する'}</button>
-      </div>
-    </section>
-  );
-}
-
-function ReviewResult({ form, agentOutput, onCopy, onSave, onEditAgain, onNewDocument, onInterview, onSaveJob }: {
-  form: ReviewForm;
-  agentOutput: ResumeReviewAgentOutput;
-  onCopy: () => void;
-  onSave: () => void;
-  onEditAgain: () => void;
-  onNewDocument: () => void;
-  onInterview: () => void;
-  onSaveJob: () => void;
-}) {
-  return (
-    <section className="result-section">
-      <div className="result-layout">
-        <aside className="analysis-panel">
-          <p className="result-kicker">Gemini Agent による分析</p>
-          <div className="score-box">
-            <span>総合評価</span>
-            <strong>{agentOutput.score}</strong>
-            <small>/100</small>
-          </div>
-          <SummaryBlock title="候補者の整理" text={agentOutput.candidateSummary} />
-          <SummaryBlock title="求人内容の整理" text={agentOutput.jobSummary} />
-          <AnalysisGroup title="良い点" items={agentOutput.goodPoints} />
-          <AnalysisGroup title="改善ポイント" items={agentOutput.improvementPoints} />
-          <AnalysisGroup title="足りない情報" items={agentOutput.missingInformation} />
-          <SummaryBlock title="Agent が行った判断" text={agentOutput.agentReasoningSummary} />
-          <div className="keyword-box">
-            <h3>おすすめキーワード</h3>
-            <div>
-              {agentOutput.recommendedKeywords.map((keyword) => <span key={keyword}>{keyword}</span>)}
-            </div>
-          </div>
-        </aside>
-
-        <article className="improved-panel">
-          <div className="result-heading">
-            <div>
-              <p>{documentLabels[form.documentType]}</p>
-              <h2>修正後の文章</h2>
-            </div>
-            <button className="btn btn-secondary" onClick={onCopy}>コピー</button>
-          </div>
-          <pre>{agentOutput.improvedText}</pre>
-          <div className="reason-box">
-            <h3>修正理由</h3>
-            {agentOutput.revisionReasons.map((item) => (
-              <div className="revision-item" key={`${item.before}-${item.after}`}>
-                <p><strong>Before:</strong> {item.before}</p>
-                <p><strong>After:</strong> {item.after}</p>
-                <p>{item.reason}</p>
-              </div>
-            ))}
-          </div>
-          <AnalysisGroup title="次のおすすめ" items={agentOutput.nextActions} />
-          <div className="flow-actions result-actions">
-            <button className="btn btn-primary" onClick={onSave}>保存する</button>
-            <button className="btn btn-secondary" onClick={onEditAgain}>もう一度編集する</button>
-          </div>
-        </article>
-      </div>
-
-      <section className="next-actions">
-        <h2>次にできること</h2>
-        <div className="next-action-grid">
-          <button onClick={onNewDocument}>この内容で別の書類を作る</button>
-          <button onClick={onInterview}>面接回答を練習する</button>
-          <button onClick={onSaveJob}>この求人を保存する</button>
-        </div>
-      </section>
-    </section>
-  );
-}
-
-function HistoryPage({ history, setHistory, copyText }: {
+function HistoryPage({
+  history,
+  setHistory,
+  showToast,
+}: {
   history: ReviewHistoryItem[];
   setHistory: (history: ReviewHistoryItem[]) => void;
-  copyText: (message: string) => void;
+  showToast: (message: string) => void;
 }) {
   const copyHistory = async (item: ReviewHistoryItem) => {
     await navigator.clipboard.writeText(item.improvedText);
-    copyText('履歴からコピーしました。');
+    showToast('履歴からコピーしました。');
   };
 
   return (
-    <main className="page-shell">
-      <div className="page-title-row">
+    <main className="workspace-shell">
+      <div className="workspace-heading">
         <div>
           <p className="eyebrow">History</p>
-          <h1>添削履歴</h1>
-          <p>保存した添削結果をあとから確認できます。</p>
+          <h1>Saved documents</h1>
+          <p>Review and reuse generated Japanese application content.</p>
         </div>
-        {history.length > 0 && <button className="btn btn-secondary" onClick={() => setHistory([])}>履歴を消去</button>}
+        {history.length > 0 && <button className="btn btn-secondary" onClick={() => setHistory([])}>Clear history</button>}
       </div>
       <div className="history-list">
-        {history.length === 0 && <div className="empty-card">まだ保存された添削結果はありません。</div>}
+        {history.length === 0 && <div className="empty-card">No saved documents yet.</div>}
         {history.map((item) => (
           <article className="history-card" key={item.id}>
             <div>
               <span>{new Date(item.createdAt).toLocaleDateString()}</span>
               <h2>{item.companyName} / {item.targetRole}</h2>
-              <p>{documentLabels[item.documentType]} · 評価 {item.matchScore}/100</p>
+              <p>{documentLabels[item.documentType]} · Score {item.matchScore}/100</p>
             </div>
-            <button className="btn btn-secondary" onClick={() => copyHistory(item)}>コピー</button>
+            <button className="btn btn-secondary" onClick={() => copyHistory(item)}>Copy</button>
           </article>
         ))}
       </div>
@@ -545,74 +607,32 @@ function HistoryPage({ history, setHistory, copyText }: {
   );
 }
 
-interface StepProps {
-  form: ReviewForm;
-  updateForm: (patch: Partial<ReviewForm>) => void;
-}
-
-function StepHeader({ title, description }: { title: string; description: string }) {
+function SectionTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
   return (
-    <div className="step-header">
-      <h1>{title}</h1>
-      <p>{description}</p>
+    <div className="section-heading">
+      <span>{eyebrow}</span>
+      <h2>{title}</h2>
     </div>
   );
 }
 
-function Field({ label, children, required, optional }: { label: string; children: ReactNode; required?: boolean; optional?: boolean }) {
+function PanelHeader({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="panel-header">
+      <h2>{title}</h2>
+      <p>{text}</p>
+    </div>
+  );
+}
+
+function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
   return (
     <label className="field-block">
-      <span className="field-label">
+      <span>
         {label}
-        {required && <em>必須</em>}
-        {optional && <small>任意</small>}
+        {required && <em>Required</em>}
       </span>
       {children}
     </label>
   );
-}
-
-function StepCard({ number, title }: { number: string; title: string }) {
-  return (
-    <div className="step-card">
-      <span>{number}</span>
-      <h3>{title}</h3>
-    </div>
-  );
-}
-
-function FeatureCard({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="feature-card">
-      <h3>{title}</h3>
-      <p>{text}</p>
-    </div>
-  );
-}
-
-function SummaryBlock({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="summary-block">
-      <h3>{title}</h3>
-      <p>{text}</p>
-    </div>
-  );
-}
-
-function AnalysisGroup({ title, items }: { title: string; items: string[] }) {
-  return (
-    <div className="analysis-group">
-      <h3>{title}</h3>
-      <ul>
-        {items.slice(0, 3).map((item) => <li key={item}>{item}</li>)}
-      </ul>
-    </div>
-  );
-}
-
-function getValidationMessage(step: ReviewStep) {
-  if (step === 0) return '現在の職種と主な仕事内容を入力してください。';
-  if (step === 1) return '応募職種と求人内容を入力してください。';
-  if (step === 2) return '添削したい文章を入力してください。';
-  return '';
 }
