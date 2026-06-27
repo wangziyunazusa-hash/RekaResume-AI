@@ -74,10 +74,10 @@ const documentDescriptions: Record<ResumeReviewDocumentType, string> = {
 };
 
 const workflowSteps = [
-  { title: 'Upload', text: 'Resume / JD / screenshot' },
-  { title: 'AI Agent Analysis', text: '経験と求人内容を理解' },
-  { title: 'Generate Documents', text: '日本語の応募書類を作成' },
-  { title: 'Review / Export', text: '編集・コピー・保存' },
+  { icon: 'cloud_upload', title: '資料をアップロード', text: 'Resume / JD / screenshot' },
+  { icon: 'psychology', title: 'AIエージェントが分析', text: '経験と求人内容を理解' },
+  { icon: 'edit_note', title: '日本語書類を生成', text: '敬語と構成を最適化' },
+  { icon: 'picture_as_pdf', title: 'Review / Export', text: '編集・コピー・保存' },
 ];
 
 const agentSteps = [
@@ -240,6 +240,7 @@ export default function App() {
         />
       )}
       {view === 'history' && <HistoryPage history={history} setHistory={setHistory} showToast={showToast} />}
+      <BottomNav view={view} setView={setView} startWorkspace={startWorkspace} />
     </div>
   );
 }
@@ -248,15 +249,16 @@ function Header({ view, setView, startWorkspace }: { view: View; setView: (view:
   return (
     <header className="site-header">
       <button className="brand" onClick={() => setView('home')} aria-label="Home">
-        <span className="brand-mark">S</span>
+        <span className="material-symbols-outlined brand-mark">auto_awesome</span>
         <span>
-          <strong>Shukatsu Copilot</strong>
-          <small>Gemini managed agent for Japan job documents</small>
+          <strong>RekaResume AI</strong>
+          <small>Gemini Pro 搭載</small>
         </span>
       </button>
       <nav className="main-nav" aria-label="Primary navigation">
-        <button className={view === 'workspace' ? 'active' : ''} onClick={startWorkspace}>Workspace</button>
+        <button className={view === 'workspace' ? 'active' : ''} onClick={startWorkspace}>Create</button>
         <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>History</button>
+        <button>Profile</button>
       </nav>
     </header>
   );
@@ -267,38 +269,42 @@ function HomePage({ startWorkspace }: { startWorkspace: () => void }) {
     <main className="home-shell">
       <section className="hero-shell">
         <div className="hero-copy-block">
-          <div className="product-pill">Powered by Gemini Managed Agent</div>
-          <h1>外国人求職者のための日本就職書類作成エージェント</h1>
+          <div className="product-pill"><span className="material-symbols-outlined">bolt</span>Gemini Pro 搭載</div>
+          <h1>AIで日本就職をシンプルに</h1>
           <p>
-            履歴書、職務経歴書、ES、志望動機、自己PR、面接練習の内容を、求人票に合わせて自然な日本語へ整えます。
+            Gemini搭載エージェントが、あなたの経験を日本式の応募書類へ自然に最適化します。
           </p>
           <div className="hero-actions">
-            <button className="btn btn-primary" onClick={startWorkspace}>Start with your resume</button>
-            <a className="btn btn-secondary" href="#workflow">View workflow</a>
+            <button className="btn btn-primary" onClick={startWorkspace}>書類作成を開始する</button>
+            <a className="btn btn-secondary" href="#workflow">使い方を見る</a>
           </div>
         </div>
         <div className="hero-preview-card">
-          <div className="preview-toolbar">
-            <span />
-            <span />
-            <span />
-          </div>
-          <div className="preview-line strong" />
-          <div className="preview-line" />
-          <div className="preview-line short" />
-          <div className="preview-score">
-            <strong>82</strong>
-            <span>Japan-fit score</span>
+          <div className="resume-mini-paper">
+            <div className="resume-mini-title">履 歴 書</div>
+            <div className="resume-mini-row wide" />
+            <div className="resume-mini-row" />
+            <div className="resume-mini-section">
+              <span>AIによる表現強化中</span>
+              <div />
+              <div />
+              <div className="short" />
+            </div>
+            <div className="preview-score">
+              <strong>95%</strong>
+              <span>AI最適化済み</span>
+            </div>
           </div>
         </div>
       </section>
 
       <section id="workflow" className="section-block">
-        <SectionTitle eyebrow="Workflow" title="Upload → AI Agent Analysis → Generate Documents → Review / Export" />
+        <SectionTitle eyebrow="Workflow" title="3つのステップで完了" />
         <div className="workflow-grid">
           {workflowSteps.map((step, index) => (
             <article className="workflow-card" key={step.title}>
-              <span>{index + 1}</span>
+              <span className="workflow-number">{index + 1}</span>
+              <span className="material-symbols-outlined workflow-icon">{step.icon}</span>
               <h3>{step.title}</h3>
               <p>{step.text}</p>
             </article>
@@ -332,11 +338,16 @@ function WorkspacePage(props: {
 }) {
   return (
     <main className="workspace-shell">
+      <div className="workspace-stepper">
+        <div className="step-item done"><span>1</span><p>Uploading</p></div>
+        <div className={`step-item ${props.loading ? 'active' : props.agentOutput ? 'done' : ''}`}><span>2</span><p>Analyzing</p></div>
+        <div className={`step-item ${props.agentOutput ? 'done' : ''}`}><span>3</span><p>Preview</p></div>
+      </div>
       <div className="workspace-heading">
         <div>
-          <p className="eyebrow">App workspace</p>
-          <h1>Japan job application workspace</h1>
-          <p>Upload materials, guide the Gemini agent, and review generated Japanese documents in one focused screen.</p>
+          <p className="eyebrow">Create</p>
+          <h1>応募書類作成</h1>
+          <p>資料をアップロードし、Geminiエージェントで分析して、日本式の応募書類を確認・編集します。</p>
         </div>
         <div className="readiness-chip">{props.readiness}% ready</div>
       </div>
@@ -373,7 +384,7 @@ function InputPanel({
 }) {
   return (
     <aside className="workspace-panel input-panel">
-      <PanelHeader title="1. Upload & inputs" text="Resume, JD, and document draft" />
+      <PanelHeader icon="cloud_upload" title="1. Upload & inputs" text="Resume, JD, and document draft" />
       <label className="upload-box">
         <input
           type="file"
@@ -381,6 +392,7 @@ function InputPanel({
           accept="image/*,.pdf,.txt,.doc,.docx"
           onChange={(event) => setUploadedFileNames(Array.from(event.target.files || []).map((file) => file.name))}
         />
+        <span className="material-symbols-outlined upload-icon">cloud_upload</span>
         <strong>Upload resume / JD screenshot</strong>
         <span>PDF, image, or text file. In this demo, filenames are passed to the agent context.</span>
       </label>
@@ -450,9 +462,10 @@ function AgentStatusPanel({
 }) {
   return (
     <section className="workspace-panel agent-panel">
-      <PanelHeader title="2. Gemini agent" text="Managed analysis pipeline" />
+      <PanelHeader icon="psychology" title={loading ? 'Gemini Agent is working...' : '2. Gemini agent'} text="AIがあなたの経歴と求人を最適化しています" />
       <div className="agent-orb">
-        <span>{loading ? 'Working' : agentOutput ? 'Done' : 'Ready'}</span>
+        <span className="material-symbols-outlined">psychology</span>
+        <strong>{loading ? 'Working' : agentOutput ? 'Done' : 'Ready'}</strong>
       </div>
       <div className="progress-track">
         <div style={{ width: `${agentOutput ? 100 : loading ? 68 : readiness}%` }} />
@@ -462,7 +475,7 @@ function AgentStatusPanel({
           const done = agentOutput || (loading && index < 4) || (!loading && readiness > index * 16);
           return (
             <div className={done ? 'done' : ''} key={step}>
-              <span>{done ? '✓' : index + 1}</span>
+              <span className="material-symbols-outlined">{done ? 'check_circle' : index === 0 ? 'hourglass_empty' : 'radio_button_unchecked'}</span>
               <p>{step}</p>
             </div>
           );
@@ -497,9 +510,15 @@ function OutputPanel({
 }) {
   return (
     <aside className="workspace-panel output-panel">
-      <PanelHeader title="3. Generated preview" text="Review, edit, copy, or continue" />
+      <PanelHeader icon="description" title="3. Generated preview" text="Review, edit, copy, or continue" />
       {!agentOutput && (
         <div className="empty-preview">
+          <div className="document-skeleton">
+            <span />
+            <span />
+            <span className="short" />
+            <span />
+          </div>
           <strong>Generated Japanese document will appear here.</strong>
           <p>Run the Gemini managed agent after entering the resume, JD, and original draft.</p>
         </div>
@@ -526,7 +545,7 @@ function OutputPanel({
             />
           </div>
           <div className="revision-list">
-            <h3>Revision reasons</h3>
+            <h3><span className="material-symbols-outlined">lightbulb</span> Geminiの改善提案</h3>
             {agentOutput.revisionReasons.map((item) => (
               <div key={`${item.before}-${item.after}`}>
                 <p><b>Before:</b> {item.before}</p>
@@ -558,6 +577,13 @@ function DocumentTypeCards({
     <div className={compact ? 'document-card-grid compact' : 'document-card-grid'}>
       {(['career_summary', 'work_experience', 'motivation', 'self_pr', 'interview_intro'] as ResumeReviewDocumentType[]).map((type) => (
         <button key={type} className={selected === type ? 'selected' : ''} onClick={() => onSelect(type)}>
+          <span className="material-symbols-outlined doc-icon">
+            {type === 'career_summary' && 'description'}
+            {type === 'work_experience' && 'assignment'}
+            {type === 'motivation' && 'favorite'}
+            {type === 'self_pr' && 'trending_up'}
+            {type === 'interview_intro' && 'chat'}
+          </span>
           <strong>{documentLabels[type]}</strong>
           <span>{documentDescriptions[type]}</span>
         </button>
@@ -585,8 +611,8 @@ function HistoryPage({
       <div className="workspace-heading">
         <div>
           <p className="eyebrow">History</p>
-          <h1>Saved documents</h1>
-          <p>Review and reuse generated Japanese application content.</p>
+          <h1>作成履歴</h1>
+          <p>生成した日本語応募書類を確認し、再利用できます。</p>
         </div>
         {history.length > 0 && <button className="btn btn-secondary" onClick={() => setHistory([])}>Clear history</button>}
       </div>
@@ -616,12 +642,31 @@ function SectionTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
   );
 }
 
-function PanelHeader({ title, text }: { title: string; text: string }) {
+function PanelHeader({ icon, title, text }: { icon?: string; title: string; text: string }) {
   return (
     <div className="panel-header">
-      <h2>{title}</h2>
+      <h2>{icon && <span className="material-symbols-outlined">{icon}</span>}{title}</h2>
       <p>{text}</p>
     </div>
+  );
+}
+
+function BottomNav({ view, setView, startWorkspace }: { view: View; setView: (view: View) => void; startWorkspace: () => void }) {
+  return (
+    <nav className="bottom-nav" aria-label="Mobile navigation">
+      <button className={view === 'home' ? 'active' : ''} onClick={() => setView('home')}>
+        <span className="material-symbols-outlined">home</span>
+        Home
+      </button>
+      <button className={view === 'workspace' ? 'active' : ''} onClick={startWorkspace}>
+        <span className="material-symbols-outlined">add_circle</span>
+        Create
+      </button>
+      <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>
+        <span className="material-symbols-outlined">history</span>
+        History
+      </button>
+    </nav>
   );
 }
 
