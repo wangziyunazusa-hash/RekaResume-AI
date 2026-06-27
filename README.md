@@ -1,27 +1,79 @@
 # Shukatsu Copilot
 
-Japan Career Agent for Global Talent.
+Managed AI Agent for Japan Job Application Documents.
 
-Shukatsu Copilot is a Gemini Hackathon MVP that helps international candidates navigate Japan's job-hunting process: resume/JD matching, Japan-style document generation, Japanese mock interview feedback, and application tracking.
+Shukatsu Copilot helps international candidates improve Japan-style application documents step by step:
 
-## Product Scope
+1. Understand the candidate's current experience.
+2. Understand the target Japanese job posting.
+3. Review the original 自己PR / 志望動機 / 職務要約 / 職務経歴 text.
+4. Return improved Japanese text, revision reasons, and next actions.
 
-- Resume and Japanese JD matching analysis
-- Japan-style document generation: 職務要約, 自己PR, 志望動機, 転職理由, ガクチカ, 1分自己紹介, 逆質問
-- Japanese language modes: N2 Friendly, Business Japanese, Interview Speaking, Furigana Support
-- Mock interview coach with scores, keigo fixes, improved answers, and follow-up questions
-- Application tracker with stages, deadlines, next actions, and weekly action plan
-- MVP localStorage persistence for tracker data
-- Mock Gemini services that produce realistic demo responses without an API key
+The UI is intentionally simple: a 4-step wizard focused on 応募書類添削.
 
-## Demo Flow
+## Gemini Managed Agent Architecture
 
-1. Open Home and click `Start Job Match`.
-2. Review or replace the sample multilingual resume and Japanese JD.
-3. Click `Analyze Match`.
-4. Go to `Documents` and generate 志望動機 or 1分自己紹介.
-5. Go to `Mock Interview`, answer the Japanese interviewer question, and get feedback.
-6. Save the role to `Tracker` and review this week's action plan.
+The main agent is `ResumeReviewManagedAgent`.
+
+Agent goal:
+
+> Based on the candidate background, target job posting, and original application document, produce Japan-ready application text with clear analysis and revision explanations.
+
+Managed subtasks:
+
+- Candidate Understanding
+- Job Understanding
+- Gap Analysis
+- Japanese Localization
+- Explanation Generation
+- Output Structuring
+
+Core files:
+
+- `src/lib/agents/types.ts`
+- `src/lib/agents/resumeReviewAgent.ts`
+- `src/lib/gemini/client.ts`
+- `src/lib/gemini/prompts.ts`
+- `src/lib/gemini/schemas.ts`
+- `src/app/api/agent/resume-review/route.ts`
+
+## API Route
+
+Equivalent API route:
+
+```http
+POST /api/agent/resume-review
+```
+
+Request body:
+
+```ts
+ResumeReviewAgentInput
+```
+
+Response body:
+
+```ts
+ResumeReviewAgentOutput
+```
+
+The current GitHub Pages deployment is static, so the frontend attempts the API call and then falls back to the local mock Managed Agent when the API route is unavailable. On Cloud Run, Next.js, or another server runtime, this route can call Gemini server-side.
+
+## Environment Variables
+
+Create `.env.local` from `.env.example`:
+
+```bash
+cp .env.example .env.local
+```
+
+Set:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+Important: `GEMINI_API_KEY` must stay server-side. Do not expose it in browser code.
 
 ## Local Development
 
@@ -36,46 +88,34 @@ npm run dev
 npm run build
 ```
 
-The static site is generated in `dist`.
+## Mock Fallback
 
-## Environment Variables
+If `GEMINI_API_KEY` is missing or the static deployment cannot reach `/api/agent/resume-review`, the app uses a realistic mock fallback in:
 
-Copy `.env.example` to `.env.local` when adding real Gemini / Google Cloud services.
-
-```bash
-cp .env.example .env.local
+```text
+src/lib/agents/resumeReviewAgent.ts
 ```
 
-For the current static MVP, no API key is required because `src/services/shukatsuAgent.ts` uses mock responses.
+This keeps the demo usable while preserving a production-ready Managed Agent boundary.
 
-## Gemini Integration Plan
-
-Centralized prompt files live in:
-
-- `src/lib/prompts/jobMatchPrompt.ts`
-- `src/lib/prompts/documentGeneratePrompt.ts`
-- `src/lib/prompts/interviewPrompt.ts`
-- `src/lib/prompts/actionPlanPrompt.ts`
-
-To connect Gemini:
-
-1. Move API calls to a backend boundary such as Cloud Run or Next.js API routes.
-2. Keep `GEMINI_API_KEY` server-side only.
-3. Send resume/JD text plus uploaded image or PDF references to Gemini multimodal APIs.
-4. Validate JSON responses before rendering.
-5. Never log full resumes or personal documents.
-
-## Google Cloud Production Plan
+## Google Cloud / Production Plan
 
 - Cloud Run: host the API service that calls Gemini.
-- Cloud Storage: store uploaded resumes, JD screenshots, and PDFs with signed URLs.
-- Firestore: store tracker records, generated document history, and interview practice history.
-- Secret Manager: store Gemini and service credentials.
-- Identity / auth: add user login before storing personal job-search data.
+- Secret Manager: store `GEMINI_API_KEY`.
+- Cloud Storage: store uploaded resumes, JD screenshots, and PDFs using signed URLs.
+- Firestore: store authenticated user history, generated documents, and tracker records.
+- Authentication: add user accounts before storing personal job-search data.
 
 ## Privacy Notes
 
-Job-search documents may contain personal data. The MVP uses browser localStorage only for tracker records. Production should use authenticated encrypted storage, short-lived upload URLs, and clear retention controls. This product helps candidates prepare honestly; it does not automate spam applications or fabricate experience.
+Job-search documents can contain personal information.
+
+- Do not log full resumes or application documents.
+- Do not hardcode API keys.
+- Keep Gemini calls on the server.
+- The current MVP uses localStorage only for saved review history.
+- Production should use authenticated, encrypted storage.
+- The product helps candidates prepare honest applications; it does not automate spam applications or fabricate experience.
 
 ## GitHub Pages Deployment
 

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { CandidateProfile, DocumentType, GeneratedDocument, JobMatchResult, LanguageMode } from './types/shukatsu';
-import { analyzeJobMatch, generateDocument } from './services/shukatsuAgent';
+import { runResumeReviewManagedAgent } from './lib/agents/resumeReviewAgent';
+import type {
+  ResumeReviewAgentInput,
+  ResumeReviewAgentOutput,
+  ResumeReviewDocumentType,
+  ResumeReviewTone,
+} from './lib/agents/types';
 
 type View = 'home' | 'review' | 'history';
 type ReviewStep = 0 | 1 | 2 | 3;
@@ -17,9 +22,9 @@ interface ReviewForm {
   companyName: string;
   jobText: string;
   requiredSkills: string;
-  documentType: DocumentType;
+  documentType: ResumeReviewDocumentType;
   originalText: string;
-  languageMode: LanguageMode;
+  tone: ResumeReviewTone;
 }
 
 interface ReviewHistoryItem {
@@ -27,29 +32,27 @@ interface ReviewHistoryItem {
   createdAt: string;
   companyName: string;
   targetRole: string;
-  documentType: DocumentType;
+  documentType: ResumeReviewDocumentType;
   matchScore: number;
   improvedText: string;
 }
 
 const HISTORY_KEY = 'shukatsu_review_history_v1';
 
-const documentLabels: Record<DocumentType, string> = {
+const documentLabels: Record<ResumeReviewDocumentType, string> = {
   career_summary: '職務要約',
   self_pr: '自己PR',
   motivation: '志望動機',
-  career_change_reason: '転職理由',
+  work_experience: '職務経歴',
   gakuchika: 'ガクチカ',
-  one_minute_intro: '面接用自己紹介',
-  reverse_questions: '逆質問',
-  contribution: '入社後に貢献できること',
+  interview_intro: '面接用自己紹介',
 };
 
-const toneLabels: Record<LanguageMode, string> = {
+const toneLabels: Record<ResumeReviewTone, string> = {
+  natural: '自然',
   business: 'ビジネス',
   interview: '面接で話しやすい',
-  n2_friendly: 'N2向け',
-  furigana: 'ふりがな付き',
+  n2: 'N2向け',
 };
 
 const steps = [
@@ -73,15 +76,57 @@ const initialForm: ReviewForm = {
   requiredSkills: '',
   documentType: 'motivation',
   originalText: '',
-  languageMode: 'business',
+  tone: 'business',
 };
+
+function toAgentInput(form: ReviewForm): ResumeReviewAgentInput {
+  return {
+    candidate: {
+      currentRole: form.currentRole,
+      currentIndustry: form.currentIndustry,
+      yearsOfExperience: form.yearsOfExperience,
+      mainTasks: form.keyTasks,
+      strengths: form.emphasizedSkills,
+      additionalInfo: form.notes,
+    },
+    targetJob: {
+      role: form.targetRole,
+      industry: form.targetIndustry,
+      companyName: form.companyName,
+      jobDescription: form.jobText,
+      requiredSkills: form.requiredSkills,
+    },
+    document: {
+      type: form.documentType,
+      originalText: form.originalText,
+      tone: form.tone,
+    },
+  };
+}
+
+async function requestResumeReview(input: ResumeReviewAgentInput): Promise<ResumeReviewAgentOutput> {
+  try {
+    const response = await fetch('/api/agent/resume-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+
+    if (!response.ok) {
+      throw new Error('API route unavailable');
+    }
+
+    return (await response.json()) as ResumeReviewAgentOutput;
+  } catch {
+    return runResumeReviewManagedAgent(input, { allowMockFallback: true });
+  }
+}
 
 export default function App() {
   const [view, setView] = useState<View>('home');
   const [step, setStep] = useState<ReviewStep>(0);
   const [form, setForm] = useState<ReviewForm>(initialForm);
-  const [matchResult, setMatchResult] = useState<JobMatchResult | null>(null);
-  const [generatedDocument, setGeneratedDocument] = useState<GeneratedDocument | null>(null);
+  const [agentOutput, setAgentOutput] = useState<ResumeReviewAgentOutput | null>(null);
   const [history, setHistory] = useState<ReviewHistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -135,52 +180,8 @@ export default function App() {
     setLoading(true);
     setError('');
     try {
-      const profile: CandidateProfile = {
-        id: 'current-user',
-        currentRole: form.currentRole,
-        currentIndustry: form.currentIndustry,
-        yearsOfExperience: form.yearsOfExperience,
-        languages: ['日本語', 'English', '中文'],
-        targetRole: form.targetRole,
-        targetIndustry: form.targetIndustry,
-        candidateType: 'unknown',
-      };
-
-      const resumeText = [
-        `現在の職種: ${form.currentRole}`,
-        `現在の業界: ${form.currentIndustry}`,
-        `経験年数: ${form.yearsOfExperience}`,
-        `主な仕事内容: ${form.keyTasks}`,
-        `強調したい経験・スキル: ${form.emphasizedSkills}`,
-        `補足情報: ${form.notes}`,
-        `添削したい原文: ${form.originalText}`,
-      ].join('\n');
-
-      const jobText = [
-        `会社名: ${form.companyName}`,
-        `応募職種: ${form.targetRole}`,
-        `応募業界: ${form.targetIndustry}`,
-        `求人票 / JD: ${form.jobText}`,
-        `求められるスキル: ${form.requiredSkills}`,
-      ].join('\n');
-
-      const nextMatchResult = await analyzeJobMatch({
-        profile,
-        resumeText,
-        jobText,
-        uploadedFileNames: [],
-      });
-      const nextDocument = await generateDocument({
-        type: form.documentType,
-        languageMode: form.languageMode,
-        resumeText,
-        jobText,
-        extraInfo: form.originalText,
-        matchResult: nextMatchResult,
-      });
-
-      setMatchResult(nextMatchResult);
-      setGeneratedDocument(nextDocument);
+      const nextOutput = await requestResumeReview(toAgentInput(form));
+      setAgentOutput(nextOutput);
       setStep(3);
     } catch {
       setError('AI添削中にエラーが発生しました。少し時間をおいて再度お試しください。');
@@ -190,29 +191,28 @@ export default function App() {
   };
 
   const copyResult = async () => {
-    if (!generatedDocument) return;
-    await navigator.clipboard.writeText(generatedDocument.content);
+    if (!agentOutput) return;
+    await navigator.clipboard.writeText(agentOutput.improvedText);
     showToast('修正後の文章をコピーしました。');
   };
 
   const saveResult = () => {
-    if (!generatedDocument || !matchResult) return;
+    if (!agentOutput) return;
     const item: ReviewHistoryItem = {
-      id: generatedDocument.id,
-      createdAt: generatedDocument.createdAt,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
       companyName: form.companyName || '会社名未入力',
       targetRole: form.targetRole || '応募職種未入力',
       documentType: form.documentType,
-      matchScore: matchResult.matchScore,
-      improvedText: generatedDocument.content,
+      matchScore: agentOutput.score,
+      improvedText: agentOutput.improvedText,
     };
     setHistory((prev) => [item, ...prev.filter((entry) => entry.id !== item.id)]);
     showToast('履歴に保存しました。');
   };
 
   const resetReview = () => {
-    setMatchResult(null);
-    setGeneratedDocument(null);
+    setAgentOutput(null);
     setStep(2);
   };
 
@@ -242,11 +242,10 @@ export default function App() {
               loading={loading}
             />
           )}
-          {step === 3 && matchResult && generatedDocument && (
+          {step === 3 && agentOutput && (
             <ReviewResult
               form={form}
-              matchResult={matchResult}
-              generatedDocument={generatedDocument}
+              agentOutput={agentOutput}
               onCopy={copyResult}
               onSave={saveResult}
               onEditAgain={resetReview}
@@ -288,7 +287,7 @@ function HomePage({ startReview }: { startReview: () => void }) {
           <p className="eyebrow">日本就職の応募書類を、順番に整える</p>
           <h1>AIで日本就職向けの応募書類をわかりやすく改善</h1>
           <p className="hero-copy">
-            履歴書・職務経歴書・自己PR・志望動機を、求人内容に合わせて自然な日本語に整えます。
+            Gemini Managed Agent が、あなたの経験と求人内容をもとに、履歴書・職務経歴書・自己PR・志望動機を自然な日本語に整えます。
           </p>
           <div className="hero-actions">
             <button className="btn btn-primary" onClick={startReview}>書類を添削する</button>
@@ -305,7 +304,7 @@ function HomePage({ startReview }: { startReview: () => void }) {
         <div className="three-grid">
           <StepCard number="1" title="現在の経験を入力" />
           <StepCard number="2" title="求人内容を入力" />
-          <StepCard number="3" title="AIが改善案を提案" />
+          <StepCard number="3" title="Gemini Agent が改善案を提案" />
         </div>
       </section>
 
@@ -408,7 +407,7 @@ function DocumentInputStep({ form, updateForm, onPrev, onSubmit, loading }: Step
       <div className="field-block">
         <div className="field-label">添削したい書類タイプ</div>
         <div className="segmented-grid">
-          {(['self_pr', 'motivation', 'career_summary', 'career_change_reason', 'gakuchika', 'one_minute_intro'] as DocumentType[]).map((type) => (
+          {(['self_pr', 'motivation', 'career_summary', 'work_experience', 'gakuchika', 'interview_intro'] as ResumeReviewDocumentType[]).map((type) => (
             <button key={type} className={form.documentType === type ? 'selected' : ''} onClick={() => updateForm({ documentType: type })}>
               {documentLabels[type]}
             </button>
@@ -419,10 +418,10 @@ function DocumentInputStep({ form, updateForm, onPrev, onSubmit, loading }: Step
         <textarea className="large-textarea focus-textarea" value={form.originalText} onChange={(e) => updateForm({ originalText: e.target.value })} placeholder="添削したい自己PR・志望動機などを貼り付けてください。短いメモでも大丈夫です。" />
       </Field>
       <div className="field-block">
-        <div className="field-label">出力语气 / トーン</div>
+        <div className="field-label">出力トーン</div>
         <div className="tone-row">
-          {(['business', 'interview', 'n2_friendly'] as LanguageMode[]).map((mode) => (
-            <button key={mode} className={form.languageMode === mode ? 'selected' : ''} onClick={() => updateForm({ languageMode: mode })}>
+          {(['natural', 'business', 'interview', 'n2'] as ResumeReviewTone[]).map((mode) => (
+            <button key={mode} className={form.tone === mode ? 'selected' : ''} onClick={() => updateForm({ tone: mode })}>
               {toneLabels[mode]}
             </button>
           ))}
@@ -430,16 +429,15 @@ function DocumentInputStep({ form, updateForm, onPrev, onSubmit, loading }: Step
       </div>
       <div className="flow-actions">
         <button className="btn btn-secondary" onClick={onPrev}>戻る</button>
-        <button className="btn btn-primary" onClick={onSubmit} disabled={loading}>{loading ? 'AI添削中...' : 'AIで添削する'}</button>
+        <button className="btn btn-primary" onClick={onSubmit} disabled={loading}>{loading ? 'Gemini Agent が応募書類を分析しています...' : 'Gemini Agent で添削する'}</button>
       </div>
     </section>
   );
 }
 
-function ReviewResult({ form, matchResult, generatedDocument, onCopy, onSave, onEditAgain, onNewDocument, onInterview, onSaveJob }: {
+function ReviewResult({ form, agentOutput, onCopy, onSave, onEditAgain, onNewDocument, onInterview, onSaveJob }: {
   form: ReviewForm;
-  matchResult: JobMatchResult;
-  generatedDocument: GeneratedDocument;
+  agentOutput: ResumeReviewAgentOutput;
   onCopy: () => void;
   onSave: () => void;
   onEditAgain: () => void;
@@ -451,18 +449,22 @@ function ReviewResult({ form, matchResult, generatedDocument, onCopy, onSave, on
     <section className="result-section">
       <div className="result-layout">
         <aside className="analysis-panel">
+          <p className="result-kicker">Gemini Agent による分析</p>
           <div className="score-box">
             <span>総合評価</span>
-            <strong>{matchResult.matchScore}</strong>
+            <strong>{agentOutput.score}</strong>
             <small>/100</small>
           </div>
-          <AnalysisGroup title="良い点" items={matchResult.strongMatches} />
-          <AnalysisGroup title="改善ポイント" items={matchResult.riskPoints} />
-          <AnalysisGroup title="足りない情報" items={matchResult.missingInfo} />
+          <SummaryBlock title="候補者の整理" text={agentOutput.candidateSummary} />
+          <SummaryBlock title="求人内容の整理" text={agentOutput.jobSummary} />
+          <AnalysisGroup title="良い点" items={agentOutput.goodPoints} />
+          <AnalysisGroup title="改善ポイント" items={agentOutput.improvementPoints} />
+          <AnalysisGroup title="足りない情報" items={agentOutput.missingInformation} />
+          <SummaryBlock title="Agent が行った判断" text={agentOutput.agentReasoningSummary} />
           <div className="keyword-box">
             <h3>おすすめキーワード</h3>
             <div>
-              {matchResult.recommendedKeywords.map((keyword) => <span key={keyword}>{keyword}</span>)}
+              {agentOutput.recommendedKeywords.map((keyword) => <span key={keyword}>{keyword}</span>)}
             </div>
           </div>
         </aside>
@@ -475,11 +477,18 @@ function ReviewResult({ form, matchResult, generatedDocument, onCopy, onSave, on
             </div>
             <button className="btn btn-secondary" onClick={onCopy}>コピー</button>
           </div>
-          <pre>{generatedDocument.content}</pre>
+          <pre>{agentOutput.improvedText}</pre>
           <div className="reason-box">
             <h3>修正理由</h3>
-            <p>{generatedDocument.explanation}</p>
+            {agentOutput.revisionReasons.map((item) => (
+              <div className="revision-item" key={`${item.before}-${item.after}`}>
+                <p><strong>Before:</strong> {item.before}</p>
+                <p><strong>After:</strong> {item.after}</p>
+                <p>{item.reason}</p>
+              </div>
+            ))}
           </div>
+          <AnalysisGroup title="次のおすすめ" items={agentOutput.nextActions} />
           <div className="flow-actions result-actions">
             <button className="btn btn-primary" onClick={onSave}>保存する</button>
             <button className="btn btn-secondary" onClick={onEditAgain}>もう一度編集する</button>
@@ -575,6 +584,15 @@ function StepCard({ number, title }: { number: string; title: string }) {
 function FeatureCard({ title, text }: { title: string; text: string }) {
   return (
     <div className="feature-card">
+      <h3>{title}</h3>
+      <p>{text}</p>
+    </div>
+  );
+}
+
+function SummaryBlock({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="summary-block">
       <h3>{title}</h3>
       <p>{text}</p>
     </div>
