@@ -1,15 +1,15 @@
-# Shukatsu Copilot
+# RekaResume AI
 
 Managed AI Agent for Japan Job Application Documents.
 
-Shukatsu Copilot helps international candidates improve Japan-style application documents step by step:
+RekaResume AI helps international candidates improve Japan-style application documents step by step:
 
 1. Understand the candidate's current experience.
 2. Understand the target Japanese job posting.
 3. Review the original 自己PR / 志望動機 / 職務要約 / 職務経歴 text.
 4. Return improved Japanese text, revision reasons, and next actions.
 
-The UI is intentionally simple: a 4-step wizard focused on 応募書類添削.
+The UI is intentionally simple: a guided workflow focused on 応募書類添削.
 
 ## Gemini Managed Agent Architecture
 
